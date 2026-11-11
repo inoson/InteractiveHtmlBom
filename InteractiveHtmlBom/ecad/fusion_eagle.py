@@ -451,8 +451,9 @@ class FusionEagleParser(EcadParser):
                         pad['shape'] = 'rect'
                     else:
                         pad['shape'] = 'roundrect'
+                        # Roundness is relative to the shorter side
                         pad['radius'] = (float(el.attrib['roundness']) / 100) \
-                            * float(el.attrib['dy']) / 2
+                            * min(pad['size']) / 2
 
                     if self.config.include_nets and \
                             element_pad_nets is not None:
@@ -487,7 +488,7 @@ class FusionEagleParser(EcadParser):
                 elif el.attrib['layer'] in [self.TOP_DOCU_LAYER,
                                             self.BOT_DOCU_LAYER]:
                     if not populate:
-                        return
+                        continue
                     dwg_layer = self.pcbdata['drawings']['fabrication']
                     top = el.attrib['layer'] == self.TOP_DOCU_LAYER
                 elif el.tag == 'wire' and \
@@ -725,12 +726,12 @@ class FusionEagleParser(EcadParser):
         p = [el.attrib['value'] for el in root.iter('param') if
               el.attrib['name'] == name]
         if len(p) == 0:
-            self.logger.warning("{0} not found, defaulting to {1}"
-                                .format(name, default))
+            self.logger.warn("{0} not found, defaulting to {1}"
+                             .format(name, default))
             return default
         else:
             if len(p) > 1:
-                self.logger.warning(
+                self.logger.warn(
                     "Multiple {0} found, using first occurrence".format(name))
             p = p[0]
             p_val = float(''.join(d for d in p if d in string.digits + '.'))
@@ -906,15 +907,16 @@ class FusionEagleParser(EcadParser):
 
         title = os.path.basename(self.file_name)
 
-        variant = [a.attrib['name'] for a in root.iter('variantdef') if
-                   a.get('current') == 'yes']
-        variant = None if not variant else variant[0]
-        if variant:
-            title = "{0}, Variant: {1}".format(title, variant)
-
         date = datetime.fromtimestamp(
             os.path.getmtime(self.file_name)).strftime('%Y-%m-%d %H:%M:%S')
         self.pcbdata['metadata'] = {'title': title, 'revision': rev,
                                     'company': company, 'date': date}
+
+        # Variants always have a name, the default assembly variant is
+        # implicit and not stored, so only set variant when one is current
+        variant = [a.attrib['name'] for a in root.iter('variantdef') if
+                   a.get('current') == 'yes']
+        if variant:
+            self.pcbdata['metadata']['variant'] = variant[0]
 
         return self.pcbdata, self.components

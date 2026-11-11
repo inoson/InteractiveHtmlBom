@@ -39,7 +39,7 @@ class Config:
         'dark_mode', 'show_pads', 'show_fabrication', 'show_silkscreen',
         'highlight_pin1', 'redraw_on_drag', 'board_rotation', 'checkboxes',
         'bom_view', 'layer_view', 'offset_back_rotation',
-        'kicad_text_formatting', 'mark_when_checked'
+        'kicad_text_formatting', 'mark_when_checked', 'custom_metadata'
     ]
     default_show_group_fields = ["Value", "Footprint"]
 
@@ -278,7 +278,7 @@ class Config:
         if self.highlight_pin1 in self.highlight_pin1_choices:
             dlg.html.highlightPin1.Selection = \
                 self.highlight_pin1_choices.index(self.highlight_pin1)
-        dlg.html.continuousRedrawCheckbox.value = self.redraw_on_drag
+        dlg.html.continuousRedrawCheckbox.Value = self.redraw_on_drag
         dlg.html.boardRotationSlider.Value = self.board_rotation
         dlg.html.offsetBackRotationCheckbox.Value = self.offset_back_rotation
         dlg.html.bomCheckboxesCtrl.Value = self.checkboxes
@@ -347,15 +347,27 @@ class Config:
         # Html
         parser.add_argument('--dark-mode', help='Default to dark mode.',
                             action='store_true')
+        parser.add_argument('--no-dark-mode', dest='dark_mode',
+                            help='Do not default to dark mode.',
+                            action='store_false', default=False)
         parser.add_argument('--hide-pads',
                             help='Hide footprint pads by default.',
                             action='store_true')
+        parser.add_argument('--show-pads', dest='hide_pads',
+                            help='Show footprint pads by default.',
+                            action='store_false', default=False)
         parser.add_argument('--show-fabrication',
                             help='Show fabrication layer by default.',
                             action='store_true')
+        parser.add_argument('--hide-fabrication', dest='show_fabrication',
+                            help='Hide fabrication layer by default.',
+                            action='store_false', default=False)
         parser.add_argument('--hide-silkscreen',
                             help='Hide silkscreen by default.',
                             action='store_true')
+        parser.add_argument('--show-silkscreen', dest='hide_silkscreen',
+                            help='Show silkscreen by default.',
+                            action='store_false', default=False)
         parser.add_argument('--highlight-pin1',
                             default=cls.highlight_pin1_choices[0],
                             const=cls.highlight_pin1_choices[1],
@@ -365,6 +377,9 @@ class Config:
         parser.add_argument('--no-redraw-on-drag',
                             help='Do not redraw pcb on drag by default.',
                             action='store_true')
+        parser.add_argument('--redraw-on-drag', dest='no_redraw_on_drag',
+                            help='Redraw pcb on drag by default.',
+                            action='store_false', default=False)
         parser.add_argument('--board-rotation', type=int,
                             default=cls.board_rotation * 5,
                             help='Board rotation in degrees (-180 to 180). '
@@ -372,6 +387,10 @@ class Config:
         parser.add_argument('--offset-back-rotation',
                             help='Offset the back of the pcb by 180 degrees',
                             action='store_true')
+        parser.add_argument('--no-offset-back-rotation',
+                            dest='offset_back_rotation',
+                            help='Do not offset the back of the pcb by 180 degrees',
+                            action='store_false', default=False)
         parser.add_argument('--checkboxes',
                             default=cls.checkboxes,
                             help='Comma separated list of checkbox columns.')
@@ -388,7 +407,15 @@ class Config:
         parser.add_argument('--no-compression',
                             help='Disable compression of pcb data.',
                             action='store_true')
+        parser.add_argument('--compression', dest='no_compression',
+                            help='Enable compression of pcb data.',
+                            action='store_false', default=False)
         parser.add_argument('--no-browser', help='Do not launch browser.',
+                            action='store_true')
+        parser.add_argument('--browser', dest='no_browser',
+                            help='Launch browser.',
+                            action='store_false', default=False)
+        parser.add_argument('--use-ini', help='Use all run options from ibom ini file.',
                             action='store_true')
 
         # General
@@ -400,8 +427,14 @@ class Config:
         parser.add_argument('--include-tracks', action='store_true',
                             help='Include track/zone information in output. '
                                  'F.Cu and B.Cu layers only.')
+        parser.add_argument('--exclude-tracks', dest='include_tracks',
+                           action='store_false', default=False,
+                           help='Exclude track/zone information from output.')
         parser.add_argument('--include-nets', action='store_true',
                             help='Include netlist information in output.')
+        parser.add_argument('--exclude-nets', dest='include_nets',
+                           action='store_false', default=False,
+                           help='Exclude netlist information from output.')
         parser.add_argument('--sort-order',
                             help='Default sort order for components. '
                                  'Must contain "~" once.',
@@ -413,8 +446,15 @@ class Config:
                                  'E.g. "X1,MH*"')
         parser.add_argument('--no-blacklist-virtual', action='store_true',
                             help='Do not blacklist virtual components.')
+        parser.add_argument('--blacklist-virtual', dest='no_blacklist_virtual',
+                            action='store_false', default=False,
+                            help='Blacklist virtual components.')
         parser.add_argument('--blacklist-empty-val', action='store_true',
                             help='Blacklist components with empty value.')
+        parser.add_argument('--no-blacklist-empty-val',
+                            dest='blacklist_empty_val',
+                            action='store_false', default=False,
+                            help='Do not blacklist components with empty value.')
 
         # Fields section
         parser.add_argument('--netlist-file',
@@ -435,6 +475,10 @@ class Config:
                             help='Normalize extra field name case. E.g. "MPN" '
                                  ', "mpn" will be considered the same field.',
                             action='store_true')
+        parser.add_argument('--no-normalize-field-case',
+                            dest='normalize_field_case',
+                            help='Do not normalize extra field name case.',
+                            action='store_false', default=False)
         parser.add_argument('--variant-field',
                             help='Name of the extra field that stores board '
                                  'variant for component.')
@@ -450,11 +494,116 @@ class Config:
                             help='Name of the extra field that indicates '
                                  'do not populate status. Components with '
                                  'this field not empty will be excluded.')
+        parser.add_argument('--custom-metadata', default='',
+                            help='Custom metadata. Gets attached to '
+                                 'the BOM and can be accessed in '
+                                 'the user customization files.')
+
+    def get_ini_defaults(self):
+        # type: () -> dict | None
+        """Read the ibom ini file and return its values keyed by the dest
+        of the matching command line option, suitable for passing to
+        ArgumentParser.set_defaults(). Installing the ini values as parser
+        defaults makes options given on the command line override the ini
+        while all other options fall back to the ini values.
+
+        Returns None if no ini file exists in the usual locations.
+        """
+        import configparser
+
+        if os.path.isfile(self.local_config_file):
+            file = self.local_config_file
+        elif os.path.isfile(self.global_config_file):
+            file = self.global_config_file
+        else:
+            return None
+        print("Loading options from %s" % file)
+
+        # Interpolation is disabled because values like bom_name_format
+        # legitimately contain '%'.
+        ini = configparser.ConfigParser(interpolation=None)
+        ini.read(file)
+
+        # Each entry is (section, key, dest, kind) mapping an ini key to
+        # the dest of the command line option holding the same setting.
+        # kind describes how the ini value translates to the value argparse
+        # would have produced for that dest:
+        #   'bool': same boolean
+        #   'not' : inverted boolean (the ini stores the positive setting,
+        #           the option's dest stores the negated one)
+        #   'str' : verbatim string; comma separated lists stay joined,
+        #           set_from_args splits them
+        # board_rotation is handled separately below. extra_data_file is
+        # intentionally not read from the ini; it is chosen dynamically
+        # unless given on the command line.
+        ini_options = [
+            # Html
+            ('html_defaults', 'dark_mode', 'dark_mode', 'bool'),
+            ('html_defaults', 'show_pads', 'hide_pads', 'not'),
+            ('html_defaults', 'show_fabrication', 'show_fabrication',
+             'bool'),
+            ('html_defaults', 'show_silkscreen', 'hide_silkscreen', 'not'),
+            ('html_defaults', 'highlight_pin1', 'highlight_pin1', 'str'),
+            ('html_defaults', 'redraw_on_drag', 'no_redraw_on_drag', 'not'),
+            ('html_defaults', 'offset_back_rotation', 'offset_back_rotation',
+             'bool'),
+            ('html_defaults', 'checkboxes', 'checkboxes', 'str'),
+            ('html_defaults', 'mark_when_checked', 'mark_when_checked',
+             'str'),
+            ('html_defaults', 'bom_view', 'bom_view', 'str'),
+            ('html_defaults', 'layer_view', 'layer_view', 'str'),
+            ('html_defaults', 'compression', 'no_compression', 'not'),
+            ('html_defaults', 'open_browser', 'no_browser', 'not'),
+            # General
+            ('general', 'bom_dest_dir', 'dest_dir', 'str'),
+            ('general', 'bom_name_format', 'name_format', 'str'),
+            ('general', 'component_sort_order', 'sort_order', 'str'),
+            ('general', 'component_blacklist', 'blacklist', 'str'),
+            ('general', 'blacklist_virtual', 'no_blacklist_virtual', 'not'),
+            ('general', 'blacklist_empty_val', 'blacklist_empty_val',
+             'bool'),
+            ('general', 'include_tracks', 'include_tracks', 'bool'),
+            ('general', 'include_nets', 'include_nets', 'bool'),
+            # Fields
+            ('fields', 'show_fields', 'show_fields', 'str'),
+            ('fields', 'group_fields', 'group_fields', 'str'),
+            ('fields', 'normalize_field_case', 'normalize_field_case',
+             'bool'),
+            ('fields', 'board_variant_field', 'variant_field', 'str'),
+            ('fields', 'board_variant_whitelist', 'variants_whitelist',
+             'str'),
+            ('fields', 'board_variant_blacklist', 'variants_blacklist',
+             'str'),
+            ('fields', 'dnp_field', 'dnp_field', 'str'),
+        ]
+
+        defaults = {}
+        for section, key, dest, kind in ini_options:
+            if not ini.has_option(section, key):
+                continue
+            if kind == 'bool':
+                defaults[dest] = ini.getboolean(section, key)
+            elif kind == 'not':
+                defaults[dest] = not ini.getboolean(section, key)
+            else:
+                defaults[dest] = ini.get(section, key)
+
+        # The ini stores rotation in multiples of 5 degrees, the command
+        # line option takes degrees.
+        if ini.has_option('html_defaults', 'board_rotation'):
+            defaults['board_rotation'] = \
+                ini.getint('html_defaults', 'board_rotation') * 5
+
+        # migration from previous settings
+        if defaults.get('highlight_pin1') == '0':
+            defaults['highlight_pin1'] = 'none'
+        if defaults.get('highlight_pin1') == '1':
+            defaults['highlight_pin1'] = 'all'
+
+        return defaults
 
     def set_from_args(self, args):
         # type: (argparse.Namespace) -> None
-        import math
-
         self.kicad_variant = args.kicad_variant
 
         # Html
@@ -464,7 +613,10 @@ class Config:
         self.show_silkscreen = not args.hide_silkscreen
         self.highlight_pin1 = args.highlight_pin1
         self.redraw_on_drag = not args.no_redraw_on_drag
-        self.board_rotation = math.fmod(args.board_rotation // 5, 37)
+        # Stored in 5 degree steps, wrap to -180..180 range
+        self.board_rotation = args.board_rotation // 5
+        if not -36 <= self.board_rotation <= 36:
+            self.board_rotation = (self.board_rotation + 36) % 72 - 36
         self.offset_back_rotation = args.offset_back_rotation
         self.checkboxes = args.checkboxes
         self.mark_when_checked = args.mark_when_checked
@@ -497,6 +649,7 @@ class Config:
         self.board_variant_whitelist = self._split(args.variants_whitelist)
         self.board_variant_blacklist = self._split(args.variants_blacklist)
         self.dnp_field = args.dnp_field
+        self.custom_metadata = args.custom_metadata
 
     def get_html_config(self):
         import json

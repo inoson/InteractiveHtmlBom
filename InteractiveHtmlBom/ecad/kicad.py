@@ -11,6 +11,12 @@ from ..core.config import Config
 from ..core.fontparser import FontParser
 
 
+# sneaky monkeypatch to work around
+# https://gitlab.com/kicad/code/kicad/-/work_items/25423
+if not hasattr(pcbnew.SwigPyIterator, 'next'):
+    setattr(pcbnew.SwigPyIterator, 'next', lambda o: next(o))
+
+
 KICAD_VERSION = [5, 1, 0]
 
 if hasattr(pcbnew, 'Version'):
@@ -71,8 +77,7 @@ class PcbnewParser(EcadParser):
                 var_fields = variant.GetFields()
                 for k in var_fields.keys():
                     props[str(k)] = str(f.GetFieldShownText(str(k)))
-                if variant.GetDNP():
-                    props["kicad_dnp"] = "DNP"
+                props["kicad_dnp"] = "DNP" if variant.GetDNP() else ""
 
         return props
 
@@ -264,6 +269,9 @@ class PcbnewParser(EcadParser):
 
         for i in range(poly.OutlineCount()):
             result.append(self.parse_line_chain(poly.Outline(i)))
+            if hasattr(poly, "HoleCount"):
+                for j in range(poly.HoleCount(i)):
+                    result.append(self.parse_line_chain(poly.Hole(i, j)))
 
         return result
 
@@ -271,6 +279,17 @@ class PcbnewParser(EcadParser):
         # type: (pcbnew.PCB_TEXT) -> dict
         if not d.IsVisible() and d.GetClass() not in ["PTEXT", "PCB_TEXT"]:
             return None
+        if (hasattr(d, "IsKnockout") and d.IsKnockout()
+                and hasattr(d, "GetEffectiveShape")):
+            shape = d.GetEffectiveShape()
+            if (shape and hasattr(shape, "Cast")
+                    and hasattr(pcbnew, "SH_POLY_SET")
+                    and shape.Type() == pcbnew.SH_POLY_SET):
+                polygons = self.parse_poly_set(shape.Cast())
+                if polygons:
+                    return {
+                        "polygons": polygons
+                    }
         pos = self.normalize(d.GetPosition())
         if hasattr(d, "GetTextThickness"):
             thickness = d.GetTextThickness() * 1e-6
@@ -373,6 +392,21 @@ class PcbnewParser(EcadParser):
             "svgpath": svgpath
         }
 
+    def parse_barcode(self, d):
+        # type: (pcbnew.BOARD_ITEM) -> dict
+        if hasattr(d, "GetPolyShape"):
+            polygons = self.parse_poly_set(d.GetPolyShape())
+            if not polygons:
+                return None
+            return {
+                "type": "polygon",
+                "pos": [0, 0],
+                "angle": 0,
+                "polygons": polygons,
+                "filled": 1,
+            }
+        return None
+
     def parse_drawing(self, d):
         # type: (pcbnew.BOARD_ITEM) -> list
         result = []
@@ -388,6 +422,8 @@ class PcbnewParser(EcadParser):
                 s = self.parse_text(d.Text())
             else:
                 s = self.parse_text(d)
+        elif d.GetClass() in ["BARCODE", "PCB_BARCODE"]:
+            s = self.parse_barcode(d)
         else:
             self.logger.info("Unsupported drawing class %s, skipping",
                              d.GetClass())
@@ -413,6 +449,79 @@ class PcbnewParser(EcadParser):
         if bbox:
             bbox.Normalize()
         return edges, bbox
+
+    @staticmethod
+    def _polygon_operation(operation, *polygons):
+        # KiCad 8 and earlier require the polygon mode argument.
+        if hasattr(pcbnew.SHAPE_POLY_SET, "PM_STRICTLY_SIMPLE"):
+            operation(*polygons, pcbnew.SHAPE_POLY_SET.PM_STRICTLY_SIMPLE)
+        else:
+            operation(*polygons)
+
+    def _clipping_methods_available(self, obj, *names):
+        missing = [name for name in names
+                   if not callable(getattr(obj, name, None))]
+        if missing:
+            self.logger.warn("Board clipping unavailable: missing API %s" %
+                             ", ".join(missing))
+        return not missing
+
+    def parse_board_clip(self):
+        """Export the physical board perimeter for clipping and edge drawing."""
+        if not self._clipping_methods_available(
+                self.board, "GetBoardPolygonOutlines"):
+            return {}
+        if not self._clipping_methods_available(
+                pcbnew, "SHAPE_POLY_SET", "FromMM"):
+            return {}
+        try:
+            board = pcbnew.SHAPE_POLY_SET()
+            if not self._clipping_methods_available(
+                    board, "OutlineCount", "Outline", "HoleCount", "Hole",
+                    "Area", "BooleanIntersection", "BooleanSubtract",
+                    "BooleanAdd"):
+                return {}
+            if KICAD_VERSION[0] >= 10:
+                valid = self.board.GetBoardPolygonOutlines(board, False)
+            else:
+                valid = self.board.GetBoardPolygonOutlines(board)
+            if not valid or board.OutlineCount() == 0:
+                self.logger.warn("Invalid board outline; copper clipping disabled")
+                return {}
+
+            # 0.01 mm keeps 0.3 mm drills smooth without the excessive vertex
+            # count of 0.001 mm. Work in KiCad's native integer coordinates.
+            error = pcbnew.FromMM(0.01)
+            edge_drills = pcbnew.SHAPE_POLY_SET()
+            for footprint in self.footprints:
+                for pad in footprint.Pads():
+                    if not self._pad_is_through_hole(pad):
+                        continue
+                    if not self._clipping_methods_available(
+                            pad, "TransformHoleToPolygon"):
+                        return {}
+                    drill = pcbnew.SHAPE_POLY_SET()
+                    if not pad.TransformHoleToPolygon(drill, 0, error):
+                        continue
+                    inside = pcbnew.SHAPE_POLY_SET()
+                    self._polygon_operation(
+                        inside.BooleanIntersection, drill, board)
+                    if inside.Area() <= 0:
+                        continue
+                    outside = pcbnew.SHAPE_POLY_SET()
+                    self._polygon_operation(
+                        outside.BooleanSubtract, drill, board)
+                    if outside.Area() > 0:
+                        self._polygon_operation(edge_drills.BooleanAdd, drill)
+
+            # Union first: overlapping holes must not cancel under even-odd fill.
+            if edge_drills.OutlineCount():
+                self._polygon_operation(board.BooleanSubtract, edge_drills)
+            return {"board_clip": {"polygons": self.parse_poly_set(board)}}
+        except (AttributeError, TypeError, RuntimeError) as e:
+            # Optional geometry must not prevent generation on older bindings.
+            self.logger.warn("Board clipping unavailable: %s" % e)
+            return {}
 
     def parse_drawings_on_layers(self, drawings, f_layer, b_layer):
         front = []
@@ -494,7 +603,8 @@ class PcbnewParser(EcadParser):
                     pads.append(pad_dict)
             return pads
         else:
-            pad_dict = self.parse_pad_layer(pad, layers_set[0])
+            pad_layer = layers_set[0] if layers_set else pcbnew.F_Cu
+            pad_dict = self.parse_pad_layer(pad, pad_layer)
             pad_dict["layers"] = layers
             return [pad_dict]
 
@@ -689,14 +799,31 @@ class PcbnewParser(EcadParser):
                 track_dict = {
                     "start": self.normalize(track.GetStart()),
                     "end": self.normalize(track.GetEnd()),
-                    "width": track.GetWidth() * 1e-6,
                     "net": track.GetNetname(),
                 }
-                if not tent_vias:
-                    track_dict["drillsize"] = track.GetDrillValue() * 1e-6
                 for layer in [pcbnew.F_Cu, pcbnew.B_Cu]:
                     if track.IsOnLayer(layer):
-                        result[layer].append(track_dict)
+                        via_dict = track_dict.copy()
+                        try:
+                            via_dict["width"] = track.GetWidth(layer) * 1e-6
+                        except TypeError:
+                            # Older KiCad versions only support GetWidth().
+                            via_dict["width"] = track.GetWidth() * 1e-6
+
+                        if hasattr(track, "IsTented"):
+                            try:
+                                untented = not track.IsTented(layer)
+                            except TypeError:
+                                # KiCad 8 and earlier use IsTented() without a side.
+                                untented = not track.IsTented()
+                        else:
+                            # Compatibility with older KiCad versions.
+                            untented = not tent_vias
+
+                        if untented:
+                            via_dict["drillsize"] = track.GetDrillValue() * 1e-6
+
+                        result[layer].append(via_dict)
             else:
                 if track.GetLayer() in [pcbnew.F_Cu, pcbnew.B_Cu]:
                     if track.GetClass() in ["ARC", "PCB_ARC"]:
@@ -882,6 +1009,7 @@ class PcbnewParser(EcadParser):
             "bom": {},
             "font_data": self.font_parser.get_parsed_font()
         }
+        pcbdata.update(self.parse_board_clip())
         if self.config.include_tracks:
             pcbdata["tracks"] = self.parse_tracks(self.board.GetTracks())
             if hasattr(self.board, "Zones"):
