@@ -976,8 +976,9 @@ function populateMetadata() {
   document.getElementById("stats-smd-pads-total").innerHTML = pads_f + pads_b;
   document.getElementById("stats-th-pads").innerHTML = pads_th;
   // Update version string
+  var upstreamVersion = /^v\d+\.\d+/.exec(pcbdata.ibom_version);
   document.getElementById("github-link").innerHTML = "InteractiveHtmlBom&nbsp;" +
-    /^v\d+\.\d+/.exec(pcbdata.ibom_version)[0];
+    (upstreamVersion ? upstreamVersion[0] : pcbdata.ibom_version);
 }
 
 function changeBomLayout(layout) {
