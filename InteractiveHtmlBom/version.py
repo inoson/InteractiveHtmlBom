@@ -3,7 +3,7 @@ import os
 import subprocess
 
 
-LAST_TAG = 'v2.12.0'
+LAST_TAG = 'inoson-2026.11.0'
 
 
 def _get_git_version():
