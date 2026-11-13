@@ -34,7 +34,7 @@ Source = "https://github.com/openscopeproject/InteractiveHtmlBom"
 
 [tool.hatch.version]
 path = "InteractiveHtmlBom/version.py"
-pattern = "LAST_TAG = 'v(?P<version>[^']+)'"
+pattern = "LAST_TAG = '(?:v|inoson-)(?P<version>[^']+)'"
 
 [tool.hatch.envs.default]
 system-packages = true
